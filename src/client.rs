@@ -155,23 +155,19 @@ impl KafkaClient {
         self.topic_brokers.get(&key).map(|b| b.clone())
     }
 
-    fn choose_partition(&mut self, topic: &str) -> Option<i32> {
-        // XXX why doing the lookup twice if once suffices? we should
-        // choose a different structure to hold our data to allow us
-        // doing only one lookup (and avoiding the allocation upon a
-        // not-yet-existing entry)
-
+    fn choose_partition(&mut self, topic: &String) -> Option<i32> {
         match self.topic_partitions.get(topic) {
-            None => None,
-            Some(partitions) if partitions.is_empty() => None,
             Some(partitions) => {
-                if let Some(curr) = self.topic_partition_curr.get_mut(topic) {
-                    *curr = (*curr+1) % partitions.len() as i32;
-                    return Some(*curr);
+                let plen = partitions.len();
+                if plen == 0 {
+                    return None;
                 }
-                self.topic_partition_curr.insert(topic.to_owned(), 1);
-                Some(1)
-            }
+
+                let curr = self.topic_partition_curr.entry(topic.clone()).or_insert(0);
+                *curr = (*curr+1) % plen as i32;
+                Some(*curr)
+            },
+            None => None
         }
 
     }
@@ -356,13 +352,17 @@ impl KafkaClient {
 
         // Map topic and partition to the corresponding broker
         for pm in input {
-            if let Some(p) = self.choose_partition(&pm.topic) {
-                if let Some(broker) = self.get_broker(&pm.topic, &p) {
-                    let entry = reqs.entry(broker.clone()).or_insert(
-                        protocol::ProduceRequest::new(required_acks, timeout, correlation, self.clientid.clone()));
-                    entry.add(pm.topic, p, pm.message);
-                }
+            let partition = self.choose_partition(&pm.topic);
+            if partition.is_none() {
+                continue
             }
+            let p = partition.unwrap();
+            self.get_broker(&pm.topic, &p).and_then(|broker| {
+                let entry = reqs.entry(broker.clone()).or_insert(
+                         protocol::ProduceRequest::new(required_acks, timeout, correlation, self.clientid.clone()));
+                entry.add(pm.topic.clone(), p.clone(), pm.message.clone());
+                Some(())
+            });
         }
 
         // Call each broker with the request formed earlier
