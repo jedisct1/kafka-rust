@@ -12,9 +12,10 @@ use std::net::{TcpStream, Shutdown};
 use std::time::{Instant, Duration};
 
 #[cfg(feature = "security")]
+use openssl::ssl;
 use openssl::ssl::{SslContext, SslStream};
 
-use error::Result;
+use error::{Error, Result};
 
 // --------------------------------------------------------------------
 
@@ -357,7 +358,12 @@ impl KafkaConnection {
     {
         let stream = try!(TcpStream::connect(host));
         let stream = match security {
-            Some(ctx) => KafkaStream::Ssl(try!(SslStream::connect(ctx, stream))),
+            Some(ctx) => {
+                match SslStream::connect(ctx, stream) {
+                    Ok(ssl_stream) => KafkaStream::Ssl(ssl_stream),
+                    Err(_) => return Err(Error::Ssl(ssl::error::Error::ZeroReturn))
+                }
+            },
             None => KafkaStream::Plain(stream),
         };
         KafkaConnection::from_stream(stream, id, host, rw_timeout)
